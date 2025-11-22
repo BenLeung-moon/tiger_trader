@@ -1,0 +1,11 @@
+credential/
+__pycache__/
+*.pyc
+venv/
+logs/
+*.log
+.env
+.vscode/
+.idea/
+.DS_Store
+

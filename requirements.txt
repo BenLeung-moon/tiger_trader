@@ -1,0 +1,9 @@
+tigeropen
+openai
+pandas
+pandas-ta
+langchain
+langchain-community
+langchain-openai
+duckduckgo-search
+langchain-trading-agents
