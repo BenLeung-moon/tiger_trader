@@ -31,7 +31,13 @@ cd tiger_trader
    mkdir -p credential
    ```
 
-2. Create `credential/tiger_openapi_token.properties`:
+2. Create `credential/ds_api.txt`:
+   ```bash
+   # Paste your DeepSeek API Key (e.g. sk-...)
+   nano credential/ds_api.txt
+   ```
+
+3. Create `credential/tiger_openapi_token.properties`:
    ```properties
    # Paste your Tiger Open API Token properties here
    tiger_id=...
@@ -39,11 +45,19 @@ cd tiger_trader
    token=...
    ```
 
-3. Create `credential/private_key.pem`:
-   ```bash
-   # Paste your private key content
+4. Create `credential/tiger_openapi_config.properties`:
+   ```properties
+   # Basic Tiger Config
+   tiger_id=YOUR_TIGER_ID
+   account=YOUR_ACCOUNT_ID
    ```
-   *Ensure `config.py` points to this key file correctly.*
+
+5. Create `credential/private_key.pem`:
+   ```bash
+   # Paste your private key content (RSA Private Key)
+   # It can start with -----BEGIN RSA PRIVATE KEY----- or just be the base64 content
+   nano credential/private_key.pem
+   ```
 
 ## 3. Deployment
 
@@ -83,4 +97,3 @@ sudo docker compose down
 
 - **Bot not trading?** Check `logs/errors.log` or `docker compose logs bot`.
 - **Database issues?** The SQLite database is stored in `./data/trade.db`. Ensure permissions are correct (Docker usually handles this).
-

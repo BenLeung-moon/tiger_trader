@@ -6,7 +6,6 @@ langchain
 langchain-community
 langchain-openai
 duckduckgo-search
-langchain-trading-agents
 sqlalchemy
 fastapi
 uvicorn

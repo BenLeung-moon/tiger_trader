@@ -37,13 +37,15 @@ TIGER_ACCOUNT = props.get('account', os.getenv('TIGER_ACCOUNT'))
 # Private Key Handling
 # Prefer pk1 (PKCS#1)
 _pk_content = props.get('private_key_pk1')
+
+if not _pk_content:
+    # Try loading from PEM file
+    _pk_content = load_file_content('credential/private_key.pem')
+
 if _pk_content:
     # Ensure it has headers
     if not _pk_content.startswith('-----BEGIN'):
         # Wrap it
-        # Standard 64 char line wrap is good practice but often not strictly required if libraries handle it.
-        # We will wrap it just in case.
-        # Actually, for simplicity, let's try adding headers.
         PRIVATE_KEY_CONTENT = f"-----BEGIN RSA PRIVATE KEY-----\n{_pk_content}\n-----END RSA PRIVATE KEY-----"
     else:
         PRIVATE_KEY_CONTENT = _pk_content

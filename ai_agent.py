@@ -78,6 +78,25 @@ class DeepSeekAgent:
             search_results = "Search unavailable. Rely on internal knowledge."
 
         # 2. Ask LLM to pick a stock (让LLM选股)
+        
+        # Determine market type based on constraint string (simple heuristic)
+        is_us_market = "Dow" in universe_constraint or "S&P" in universe_constraint or "US" in universe_constraint or "NASDAQ" in universe_constraint
+        
+        market_instruction = ""
+        if is_us_market:
+            market_instruction = """
+        - US MARKET INSTRUCTION: You MUST select a valid US ticker symbol (e.g., AAPL, NVDA, MSFT, GLD). 
+        - Do NOT use numeric codes for US stocks.
+        - If unsure, pick a major ETF like 'SPY' (S&P 500) or 'QQQ' (Nasdaq 100).
+        """
+        else:
+            market_instruction = """
+        - HK/CN MARKET INSTRUCTION: 
+        - If selecting a Shanghai/Shenzhen stock (CSI 300), ensure you use the correct 6-digit code (e.g., 600519).
+        - If selecting a HK stock, use the 5-digit code (e.g., 00700).
+        - If unsure, pick a major ETF like '2800' (Tracker Fund).
+        """
+
         prompt = f"""
         You are an expert portfolio manager.
         User Strategy: {user_strategy}
@@ -87,8 +106,8 @@ class DeepSeekAgent:
         Market Search Context:
         {search_results}
         
-        Task: Select the SINGLE best ticker from the constrained universe (HSI, HSCEI, CSI 300) that matches the strategy.
-        You MUST strictly select a valid ticker symbol (e.g., 00700 for Tencent, 09988 for Alibaba, etc.).
+        Task: Select the SINGLE best ticker from the constrained universe that matches the strategy.
+        You MUST strictly select a valid ticker symbol.
         
         Consider the current holdings. You may choose to:
         1. Add to an existing winning position.
@@ -97,10 +116,8 @@ class DeepSeekAgent:
         
         CRITICAL INSTRUCTION: 
         - Do NOT pick a stock randomly. Use the search context or your knowledge of these indices to pick a strong candidate.
-        - VERIFY the ticker symbol matches the company name. Do NOT mix up tickers (e.g., 00857 is PetroChina, NOT Kweichow Moutai).
-        - If selecting a Shanghai/Shenzhen stock (CSI 300), ensure you use the correct 6-digit code (e.g., 600519).
-        - If selecting a HK stock, use the 5-digit code (e.g., 00700).
-        - If unsure, pick a major ETF like '2800' (Tracker Fund).
+        - VERIFY the ticker symbol matches the company name. Do NOT mix up tickers.
+        {market_instruction}
         
         Return ONLY a JSON object: 
         {{
@@ -125,10 +142,37 @@ class DeepSeekAgent:
             # Ensure company_name is present for consistency
             if "company_name" not in result:
                  result["company_name"] = "Unknown"
+            
+            # Verification Step for US Tickers (Alpha)
+            symbol = result.get("symbol", "")
+            # Check if symbol is alpha (US style) and we are in US mode or symbol looks like US ticker
+            if symbol and not symbol.isdigit() and is_us_market:
+                company = result.get("company_name", "Unknown")
+                print(f"  - Verifying US ticker: {symbol} ({company})...")
+                
+                verify_query = f"ticker symbol for {company}"
+                try:
+                    # Use search tool to verify
+                    verify_results = search_tool.run(verify_query)
+                    # Check if symbol exists in search results (case insensitive)
+                    if symbol.upper() not in verify_results.upper():
+                        print(f"  - Warning: Ticker {symbol} not found in verification search for {company}.")
+                        # Fallback to SPY
+                        result["symbol"] = "SPY"
+                        result["company_name"] = "SPDR S&P 500 ETF Trust"
+                        result["reason"] = f"Fallback: Original ticker {symbol} verification failed. Switched to market index."
+                        print(f"  - Fallback to SPY.")
+                    else:
+                        print(f"  - Ticker {symbol} verified.")
+                except Exception as ve:
+                    print(f"  - Verification search failed: {ve}")
+
             return result
         except Exception as e:
             error_logger.error(f"Ticker Selection Error: {e}")
-            return {"symbol": "2800", "company_name": "Tracker Fund", "reason": "Fallback due to error"}
+            fallback_symbol = "SPY" if is_us_market else "2800"
+            fallback_name = "S&P 500 ETF" if is_us_market else "Tracker Fund"
+            return {"symbol": fallback_symbol, "company_name": fallback_name, "reason": "Fallback due to error"}
 
     def manage_pending_orders(self, open_orders, current_market_prices):
         """

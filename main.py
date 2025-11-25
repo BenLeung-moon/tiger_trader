@@ -91,6 +91,19 @@ def main():
                 time.sleep(60)
                 continue
 
+            # Determine active market and universe constraint
+            universe_constraint = "HSI, HSCEI, CSI 300" # Default fallback
+            market_region = "HK_CN"
+
+            if us_open:
+                universe_constraint = "Dow Jones 30, S&P 500, NASDAQ 100, Commodity ETFs (GLD, SLV, USO)"
+                market_region = "US"
+                print(f"Trading Mode: US Market (Constraint: {universe_constraint})")
+            elif hk_open or cn_open:
+                universe_constraint = "HSI, HSCEI, CSI 300"
+                market_region = "HK_CN"
+                print(f"Trading Mode: HK/CN Market (Constraint: {universe_constraint})")
+
             # 2. Step 1: Select Ticker (The "Scanner" Agent) - 选股
             # User requested AI to pick stocks with internet access and HSI/HSCEI/CSI300 constraint
             # NEW: Check portfolio first (先检查现有持仓)
@@ -161,9 +174,9 @@ def main():
                             else:
                                 print(f"Calculated sell quantity is 0 for {symbol} (Total: {total_qty}, Pct: {percentage})")
 
-            print(f"AI Agent is scanning the market (HSI, HSCEI, CSI 300) based on strategy...")
+            print(f"AI Agent is scanning the market ({universe_constraint}) based on strategy...")
             
-            selection = ai_agent.select_ticker(strategy, current_holdings=current_holdings, universe_constraint="HSI, HSCEI, CSI 300")
+            selection = ai_agent.select_ticker(strategy, current_holdings=current_holdings, universe_constraint=universe_constraint)
             target_symbol = selection.get('symbol')
             company_name = selection.get('company_name', 'Unknown')
             reason = selection.get('reason', 'No reason provided')
