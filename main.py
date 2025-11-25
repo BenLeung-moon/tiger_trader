@@ -40,6 +40,8 @@ def main():
 
     # User Input
     # For non-interactive environments, we can set a default strategy
+    print(f"Using Tiger Account ID: {config.TIGER_ACCOUNT}")
+    
     try:
         strategy = input("Enter Strategy Description (e.g., 'Find undervalued tech stocks with positive momentum'): ").strip()
     except EOFError:
@@ -93,10 +95,41 @@ def main():
                 for currency, data in funds_info.items():
                     print(f"  - {currency}: Available {data.get('available_for_trade', 0)}")
             
+            # Position Management (Risk Control)
+            if current_holdings:
+                print("Running Position Management (Risk Control)...")
+                position_decisions = ai_agent.manage_positions(current_holdings)
+                
+                for decision in position_decisions:
+                    if decision.get('action') == 'SELL':
+                        symbol = decision.get('symbol')
+                        percentage = decision.get('percentage', 1.0)
+                        reason = decision.get('reason', 'Risk Management')
+                        
+                        # Find the quantity to sell
+                        pos_data = next((p for p in current_holdings if p['symbol'] == symbol), None)
+                        if pos_data:
+                            total_qty = pos_data['quantity']
+                            sell_qty = int(total_qty * percentage)
+                            
+                            if sell_qty > 0:
+                                print(f"Executing RISK MANAGEMENT SELL: {symbol}, Qty: {sell_qty}, Reason: {reason}")
+                                order_payload = {
+                                    "symbol": symbol,
+                                    "action": "SELL",
+                                    "quantity": sell_qty,
+                                    "price": 0, # Market order for immediate exit
+                                    "reason": reason
+                                }
+                                executor.place_order(order_payload)
+                            else:
+                                print(f"Calculated sell quantity is 0 for {symbol} (Total: {total_qty}, Pct: {percentage})")
+
             print(f"AI Agent is scanning the market (HSI, HSCEI, CSI 300) based on strategy...")
             
             selection = ai_agent.select_ticker(strategy, current_holdings=current_holdings, universe_constraint="HSI, HSCEI, CSI 300")
             target_symbol = selection.get('symbol')
+            company_name = selection.get('company_name', 'Unknown')
             reason = selection.get('reason', 'No reason provided')
             
             # Fix for HK Tickers: Ensure 5 digits (e.g., 700 -> 00700, 2828 -> 02828)
@@ -109,7 +142,7 @@ def main():
                 print("AI failed to select a target. Skipping cycle.")
                 continue
                 
-            print(f"✓ Target Selected: {target_symbol}")
+            print(f"✓ Target Selected: {target_symbol} ({company_name})")
             print(f"  Reason: {reason}")
 
             # 3. Step 2: Fetch Data (The "Data" Step)
@@ -191,12 +224,65 @@ def main():
                             print(status_msg)
                             trading_logger.info(status_msg)
                             
-                            if updated_order.status == 'Filled':
+                            status_str = str(updated_order.status)
+                            if updated_order.status == 'Filled' or 'FILLED' in status_str:
                                 print("Order executed successfully.")
-                            elif updated_order.status in ['Submitted', 'New']:
+                            elif updated_order.status in ['Submitted', 'New'] or any(s in status_str for s in ['SUBMITTED', 'NEW', 'PENDING']):
                                 print("Order is active and waiting to be filled.")
+                            elif 'EXPIRED' in status_str or 'REJECTED' in status_str:
+                                print(f"Order failed with status: {status_str}")
+                                
+                                # Fallback for HK Stocks to RMB Counter (e.g., 00388 -> 80388)
+                                if target_symbol and target_symbol.isdigit() and len(target_symbol) == 5 and target_symbol.startswith('0'):
+                                    rmb_symbol = '8' + target_symbol[1:]
+                                    print(f"Initiating fallback to RMB counter: {target_symbol} -> {rmb_symbol}")
+                                    trading_logger.info(f"Fallback: Retrying {target_symbol} on RMB counter {rmb_symbol}")
+                                    
+                                    # Update decision with new symbol
+                                    decision['symbol'] = rmb_symbol
+                                    
+                                    try:
+                                        # Fetch real-time price for RMB counter
+                                        print(f"Fetching real-time price for RMB counter {rmb_symbol}...")
+                                        rmb_price = data_engine.get_realtime_price(rmb_symbol)
+                                        
+                                        if rmb_price and rmb_price > 0:
+                                            # Calculate new limit price
+                                            buffer = 0.02
+                                            if decision.get('action') == 'BUY':
+                                                new_limit = rmb_price * (1 + buffer)
+                                            else:
+                                                new_limit = rmb_price * (1 - buffer)
+                                            
+                                            decision['price'] = round_price_to_tick(new_limit, is_hk=True)
+                                            print(f"RMB Counter Price: {rmb_price} -> Limit Order: {decision['price']}")
+                                        else:
+                                            print("Could not fetch RMB price. Defaulting to Market Order (price=0).")
+                                            decision['price'] = 0
+                                    except Exception as price_err:
+                                        print(f"Error fetching RMB price: {price_err}. Defaulting to Market Order.")
+                                        decision['price'] = 0
+
+                                    # Execute Fallback Order
+                                    print(f"Executing fallback order for {rmb_symbol}...")
+                                    fallback_order = executor.place_order(decision)
+                                    
+                                    if fallback_order:
+                                        # Verify Fallback Order
+                                        time.sleep(2)
+                                        fb_id = fallback_order.id if hasattr(fallback_order, 'id') and fallback_order.id else (fallback_order.order_id if hasattr(fallback_order, 'order_id') else None)
+                                        
+                                        if fb_id:
+                                            fb_status_obj = executor.get_order_status(fb_id)
+                                            if fb_status_obj:
+                                                print(f"Fallback Order Status: {fb_status_obj.status} | Filled: {fb_status_obj.filled}")
+                                                trading_logger.info(f"Fallback Order Status: {fb_status_obj.status}")
+                                        else:
+                                            print("Fallback order placed but ID not found.")
+                                    else:
+                                        print("Fallback order placement failed.")
                             else:
-                                print(f"Order state: {updated_order.status}")
+                                print(f"Order state: {status_str}")
                         else:
                             msg = "Could not fetch updated order status."
                             print(msg)

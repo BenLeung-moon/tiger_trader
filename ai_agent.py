@@ -82,10 +82,18 @@ class DeepSeekAgent:
         3. Hedge if necessary (though normally we look for long opportunities).
         
         CRITICAL INSTRUCTION: 
-        Do NOT pick a stock randomly. Use the search context or your knowledge of these indices to pick a strong candidate.
-        If unsure, pick a major ETF like '2800' (Tracker Fund).
+        - Do NOT pick a stock randomly. Use the search context or your knowledge of these indices to pick a strong candidate.
+        - VERIFY the ticker symbol matches the company name. Do NOT mix up tickers (e.g., 00857 is PetroChina, NOT Kweichow Moutai).
+        - If selecting a Shanghai/Shenzhen stock (CSI 300), ensure you use the correct 6-digit code (e.g., 600519).
+        - If selecting a HK stock, use the 5-digit code (e.g., 00700).
+        - If unsure, pick a major ETF like '2800' (Tracker Fund).
         
-        Return ONLY a JSON object: {{"symbol": "TICKER", "reason": "Detailed reason why this is a valuable investment"}}
+        Return ONLY a JSON object: 
+        {{
+            "symbol": "TICKER", 
+            "company_name": "Company Name",
+            "reason": "Detailed reason why this is a valuable investment"
+        }}
         """
         
         try:
@@ -98,10 +106,15 @@ class DeepSeekAgent:
                 content = content.replace("```json", "").replace("```", "")
             elif content.startswith("```"):
                 content = content.replace("```", "")
-            return json.loads(content)
+            
+            result = json.loads(content)
+            # Ensure company_name is present for consistency
+            if "company_name" not in result:
+                 result["company_name"] = "Unknown"
+            return result
         except Exception as e:
             error_logger.error(f"Ticker Selection Error: {e}")
-            return {"symbol": "2800", "reason": "Fallback due to error"}
+            return {"symbol": "2800", "company_name": "Tracker Fund", "reason": "Fallback due to error"}
 
     def manage_pending_orders(self, open_orders, current_market_prices):
         """
@@ -119,13 +132,14 @@ class DeepSeekAgent:
             symbol = order.contract.symbol
             market_price = current_market_prices.get(symbol, "Unknown")
             
-            # Safe attribute access
-            order_id = order.order_id if hasattr(order, 'order_id') else (order.id if hasattr(order, 'id') else "Unknown")
+            # Safe attribute access - prefer 'id' as it is usually the canonical ID for API operations
+            order_id = order.id if hasattr(order, 'id') and order.id else (order.order_id if hasattr(order, 'order_id') else "Unknown")
             limit_price = order.limit_price if hasattr(order, 'limit_price') else "Market"
             quantity = order.quantity
             filled = order.filled
-            status = order.status
-            action = order.action
+            # Convert Enum to string for JSON serialization
+            status = str(order.status)
+            action = str(order.action)
             
             orders_context.append({
                 "id": order_id,
@@ -149,6 +163,7 @@ class DeepSeekAgent:
         For each order, compare the 'limit_price' with 'market_price'.
         - If BUY order and market_price >> limit_price: The price has moved away. Consider MODIFY to increase price or CANCEL.
         - If BUY order and market_price is close: KEEP (wait).
+        - If BUY order and market_price < limit_price: Order should have filled. It might be stuck. Consider CANCEL if it persists.
         - If SELL order and market_price << limit_price: The price has dropped. Consider MODIFY to decrease price or CANCEL.
         - If order has been pending for a long time (implied by context not changing), be more aggressive.
         
@@ -182,6 +197,58 @@ class DeepSeekAgent:
             return actions
         except Exception as e:
             error_logger.error(f"Order Management Error: {e}")
+            return []
+
+    def manage_positions(self, positions):
+        """
+        Review all current positions for risk management (Stop Loss / Take Profit).
+        """
+        if not positions:
+            return []
+
+        print(f"  - Risk Manager: Reviewing {len(positions)} positions...")
+
+        prompt = f"""
+        You are a Portfolio Risk Manager.
+        Review the current positions to decide if we should EXIT any of them.
+        
+        Current Positions:
+        {json.dumps(positions, indent=2)}
+        
+        Strategy Guidelines:
+        1. Stop Loss: If unrealized_pnl is significantly negative (e.g., < -8% to -10%), strictly SELL to cut losses.
+        2. Take Profit: If unrealized_pnl is significantly positive (e.g., > 15-20%), consider selling to lock in profits, unless you believe it will run further.
+        3. Stagnation: If a stock is moving sideways for too long (hard to tell from just this snapshot, but use PnL as proxy), consider freeing up capital.
+        
+        Task: Return a JSON list of decisions for EACH position.
+        Format:
+        [
+            {{
+                "symbol": "TICKER",
+                "action": "SELL", // Options: "HOLD", "SELL"
+                "percentage": 1.0, // 1.0 = Sell 100%, 0.5 = Sell 50%. Only required if action is SELL.
+                "reason": "Hit stop loss at -10%"
+            }}
+        ]
+        
+        CRITICAL: 
+        - Only recommend "SELL" if there is a strong reason (Stop Loss / Take Profit). Otherwise "HOLD".
+        - Return valid JSON only.
+        """
+        
+        try:
+            response = self.llm.invoke(prompt)
+            content = response.content.strip()
+            
+            if content.startswith("```json"):
+                content = content.replace("```json", "").replace("```", "")
+            elif content.startswith("```"):
+                content = content.replace("```", "")
+                
+            decisions = json.loads(content)
+            return decisions
+        except Exception as e:
+            error_logger.error(f"Position Management Error: {e}")
             return []
 
     def analyze_market(self, symbol, daily_data_json, weekly_data_json, fundamental_data_json, user_strategy, position_context=None, funds_info=None):

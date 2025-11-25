@@ -96,11 +96,14 @@ class RateLimiter:
                 if wait_time > 0:
                     time.sleep(wait_time)
 
-def round_price_to_tick(price, is_hk=False):
+def round_price_to_tick(price, is_hk=False, tick_size=None):
     """
     Rounds the price to the nearest valid tick size.
     Supports HKEX tick rules and standard US 0.01 tick.
     """
+    if tick_size:
+        return round(round(price / tick_size) * tick_size, 3)
+
     if not is_hk:
         # US Stocks usually 0.01
         return round(price, 2)

@@ -128,6 +128,8 @@ class DataEngine:
         df.ta.bbands(length=20, append=True)
 
         # Fill NaN values that result from indicator calculations
-        df = df.fillna(0)
+        # Fix FutureWarning: Downcasting object dtype arrays on .fillna is deprecated
+        with pd.option_context('future.no_silent_downcasting', True):
+            df = df.fillna(0).infer_objects(copy=False)
         
         return df

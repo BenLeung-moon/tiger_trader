@@ -2,7 +2,7 @@ from tigeropen.trade.trade_client import TradeClient
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.common.consts import Market, SecurityType, Currency
 import config
-from utils import setup_loggers
+from utils import setup_loggers, round_price_to_tick
 
 trading_logger, error_logger = setup_loggers()
 
@@ -12,6 +12,7 @@ class OrderExecutor:
         self.client_config.private_key = config.PRIVATE_KEY_CONTENT
         self.client_config.tiger_id = config.TIGER_ID
         self.client_config.account = config.TIGER_ACCOUNT
+        self.client_config.token = config.TIGER_TOKEN
         
         try:
             self.trade_client = TradeClient(self.client_config)
@@ -61,6 +62,19 @@ class OrderExecutor:
             error_logger.error(f"Error fetching contract for {symbol}: {e}")
             return None
 
+        # Validate and Adjust Price
+        if price > 0:
+            is_hk = (market == Market.HK)
+            
+            # Attempt to get tick size from contract if available
+            tick_size = None
+            if hasattr(contract, 'min_tick') and contract.min_tick:
+                tick_size = contract.min_tick
+                trading_logger.info(f"Using dynamic tick size from contract: {tick_size}")
+            
+            price = round_price_to_tick(price, is_hk=is_hk, tick_size=tick_size)
+            trading_logger.info(f"Price adjusted to tick size: {price}")
+
         try:
             if price > 0:
                 # Limit Order
@@ -83,12 +97,34 @@ class OrderExecutor:
                 )
             
             # The return from create_order is usually an Order object or ID
-            trading_logger.info(f"Order placed successfully! Order ID: {order.order_id if hasattr(order, 'order_id') else order}")
+            
             self.trade_client.place_order(order)
+            trading_logger.info(f"Order placed successfully! Order ID: {order.order_id if hasattr(order, 'order_id') else order}")
             
             return order
             
         except Exception as e:
+            err_msg = str(e)
+            # Handle "Odd Lot" error for Standard Accounts (Code 1200)
+            # 标准账户不允许限价单平碎股，需改用市价单
+            if "code=1200" in err_msg and "odd lot" in err_msg.lower():
+                trading_logger.warning(f"Odd Lot Limit Order failed ({err_msg}). Retrying as Market Order...")
+                try:
+                    # Retry with Market Order
+                    order = self.trade_client.create_order(
+                        account=config.TIGER_ACCOUNT,
+                        contract=contract,
+                        action=action,
+                        order_type='MKT',
+                        quantity=quantity
+                    )
+                    self.trade_client.place_order(order)
+                    trading_logger.info(f"Retry Market Order placed successfully! Order ID: {order.order_id if hasattr(order, 'order_id') else order}")
+                    return order
+                except Exception as retry_e:
+                    error_logger.error(f"Failed to execute retry Market Order: {retry_e}")
+                    return None
+
             error_logger.error(f"Failed to execute order: {e}")
             return None
 
@@ -157,3 +193,18 @@ class OrderExecutor:
         except Exception as e:
             error_logger.error(f"Error modifying order {order_id}: {e}")
             return False
+
+    def cancel_all_open_orders(self):
+        """
+        Cancels all currently open orders.
+        """
+        open_orders = self.get_open_orders()
+        if not open_orders:
+            return
+        
+        print(f"Cancelling {len(open_orders)} open orders...")
+        for order in open_orders:
+            # Handle different ID attributes - prefer 'id'
+            oid = order.id if hasattr(order, 'id') and order.id else (order.order_id if hasattr(order, 'order_id') else None)
+            if oid:
+                self.cancel_order(oid)
