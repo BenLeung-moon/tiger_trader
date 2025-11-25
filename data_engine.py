@@ -1,3 +1,14 @@
+"""
+Data Engine Module (数据引擎模块)
+
+This module handles all market data retrieval:
+1. Historical K-line data (get_historical_data).
+2. Real-time price data (get_realtime_price).
+3. Fundamental data (get_fundamental_data).
+4. Market status check (check_market_status).
+5. Technical indicator calculation (add_technical_indicators).
+"""
+
 import pandas as pd
 import pandas_ta as ta
 from tigeropen.common.consts import BarPeriod, Market
@@ -26,6 +37,7 @@ class DataEngine:
     def get_historical_data(self, symbol, period=BarPeriod.DAY, limit=100):
         """
         Fetch historical K-line data.
+        获取历史K线数据。
         """
         if not self.quote_client:
             error_logger.warning("QuoteClient not initialized.")
@@ -45,6 +57,7 @@ class DataEngine:
     def get_fundamental_data(self, symbol):
         """
         Fetch basic fundamental data (Financial ratios).
+        获取基本面数据（财务比率等）。
         """
         if not self.quote_client:
             return {}
@@ -65,6 +78,7 @@ class DataEngine:
     def get_realtime_price(self, symbol):
         """
         Fetch the latest real-time price for a symbol.
+        获取最新的实时价格。
         """
         if not self.quote_client:
             return None
@@ -84,6 +98,7 @@ class DataEngine:
         """
         Check if the given market is open.
         Returns (bool, str) - (is_open, status_description)
+        检查市场是否开盘。
         """
         if not self.quote_client:
             return False, "QuoteClient not initialized"
@@ -104,6 +119,7 @@ class DataEngine:
     def add_technical_indicators(self, df):
         """
         Add technical indicators to the DataFrame using pandas_ta.
+        添加技术指标（RSI, MACD, SMA, Bollinger Bands）。
         """
         if df.empty:
             return df

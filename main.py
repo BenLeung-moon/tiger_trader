@@ -1,3 +1,19 @@
+"""
+Tiger Trade & DeepSeek Auto Trader (Agentic Mode)
+Main entry point for the autonomous trading bot.
+主要的交易机器人入口程序。
+
+Flow:
+1. Initialize all modules (DB, Data, AI, Execution, Portfolio).
+2. Enter main loop.
+3. Check market status.
+4. Agent Scanner: Select potential tickers.
+5. Data Engine: Fetch data.
+6. AI Analyst: Analyze and decide (Buy/Sell/Hold).
+7. Execution: Place orders.
+8. Manage Pending Orders.
+"""
+
 import sys
 import json
 import time
@@ -9,16 +25,18 @@ from portfolio import PortfolioManager
 from utils import RateLimiter, round_price_to_tick, setup_loggers, setup_position_logger
 from universe_manager import UniverseManager
 from tigeropen.common.consts import Market, BarPeriod
+from database import init_db, SessionLocal, PortfolioSnapshot
 
-# Setup Logging
+# Setup Logging (设置日志)
 trading_logger, error_logger = setup_loggers()
 position_logger = setup_position_logger()
 
 def main():
     print("=== Tiger Trade & DeepSeek Auto Trader (Agentic Mode) ===")
     
-    # Initialize Modules
+    # Initialize Modules (初始化模块)
     try:
+        init_db()
         if not config.TIGER_TOKEN:
             msg = "Error: TIGER_TOKEN is missing. Please check tiger_openapi_token.txt"
             print(msg)
@@ -30,7 +48,9 @@ def main():
         executor = OrderExecutor()
         portfolio_mgr = PortfolioManager()
         universe_mgr = UniverseManager()
-        # Rate Limit: 5 actions per minute (60 seconds)
+        
+        # Rate Limit: 5 actions per minute (60 seconds) to avoid API throttling
+        # 限流: 每分钟5次操作
         rate_limiter = RateLimiter(max_calls=5, period_seconds=60)
         print("Modules initialized successfully.")
     except Exception as e:
@@ -38,7 +58,7 @@ def main():
         print(f"Initialization Error: {e}")
         return
 
-    # User Input
+    # User Input (用户输入策略)
     # For non-interactive environments, we can set a default strategy
     print(f"Using Tiger Account ID: {config.TIGER_ACCOUNT}")
     
@@ -52,7 +72,7 @@ def main():
 
     while True:
         try:
-            # 1. Rate Limiting Check
+            # 1. Rate Limiting Check (限流检查)
             if not rate_limiter.can_proceed():
                 print("Rate limit reached. Waiting for next slot...")
                 rate_limiter.wait_for_slot()
@@ -60,7 +80,7 @@ def main():
 
             print(f"\n--- New Cycle: {time.strftime('%H:%M:%S')} ---")
             
-            # Check Market Status
+            # Check Market Status (检查市场状态)
             us_open, us_status = data_engine.check_market_status(Market.US)
             hk_open, hk_status = data_engine.check_market_status(Market.HK)
             cn_open, cn_status = data_engine.check_market_status(Market.CN)
@@ -71,13 +91,13 @@ def main():
                 time.sleep(60)
                 continue
 
-            # 2. Step 1: Select Ticker (The "Scanner" Agent)
+            # 2. Step 1: Select Ticker (The "Scanner" Agent) - 选股
             # User requested AI to pick stocks with internet access and HSI/HSCEI/CSI300 constraint
-            # NEW: Check portfolio first
+            # NEW: Check portfolio first (先检查现有持仓)
             print("Checking current portfolio holdings...")
             current_holdings = portfolio_mgr.get_all_positions()
             
-            # Log latest positions
+            # Log latest positions (记录持仓日志)
             try:
                 position_logger.info(f"Positions: {json.dumps(current_holdings)}")
             except Exception as log_err:
@@ -94,8 +114,24 @@ def main():
                 print("Account Funds:")
                 for currency, data in funds_info.items():
                     print(f"  - {currency}: Available {data.get('available_for_trade', 0)}")
+
+            # Record Portfolio Snapshot (保存资产快照到数据库)
+            try:
+                summary = portfolio_mgr.get_portfolio_summary()
+                if summary:
+                    db = SessionLocal()
+                    snapshot = PortfolioSnapshot(
+                        total_equity=summary.get('net_liquidation', 0.0),
+                        cash_balance=summary.get('cash_balance', 0.0), 
+                        market_value=summary.get('gross_position_value', 0.0)
+                    )
+                    db.add(snapshot)
+                    db.commit()
+                    db.close()
+            except Exception as snap_err:
+                error_logger.error(f"Failed to save portfolio snapshot: {snap_err}")
             
-            # Position Management (Risk Control)
+            # Position Management (Risk Control) - 风控管理
             if current_holdings:
                 print("Running Position Management (Risk Control)...")
                 position_decisions = ai_agent.manage_positions(current_holdings)
@@ -133,6 +169,7 @@ def main():
             reason = selection.get('reason', 'No reason provided')
             
             # Fix for HK Tickers: Ensure 5 digits (e.g., 700 -> 00700, 2828 -> 02828)
+            # 港股代码修正
             if target_symbol and target_symbol.isdigit() and len(target_symbol) < 5:
                 original_symbol = target_symbol
                 target_symbol = target_symbol.zfill(5)
@@ -145,7 +182,7 @@ def main():
             print(f"✓ Target Selected: {target_symbol} ({company_name})")
             print(f"  Reason: {reason}")
 
-            # 3. Step 2: Fetch Data (The "Data" Step)
+            # 3. Step 2: Fetch Data (The "Data" Step) - 获取数据
             print(f"Fetching data for {target_symbol}...")
             # Fetch Daily Data (Day K-line)
             df_day = data_engine.get_historical_data(target_symbol, period=BarPeriod.DAY, limit=120)
@@ -160,7 +197,7 @@ def main():
                 time.sleep(5)
                 continue
 
-            # Add Indicators & Prepare JSON
+            # Add Indicators & Prepare JSON (添加技术指标)
             df_day_enriched = data_engine.add_technical_indicators(df_day)
             daily_data_json = df_day_enriched.tail(14).to_json(orient="records")
             
@@ -170,14 +207,14 @@ def main():
             else:
                 weekly_data_json = "[]"
             
-            # 4. Step 3: Deep Analysis with Web Search (The "Analyst" Agent)
+            # 4. Step 3: Deep Analysis with Web Search (The "Analyst" Agent) - 深度分析
             print(f"Analyst Agent is researching {target_symbol}...")
             decision = ai_agent.analyze_market(target_symbol, daily_data_json, weekly_data_json, fundamentals, strategy, position_context=position, funds_info=funds_info)
             
             print("\n=== Final Decision ===")
             print(json.dumps(decision, indent=2))
             
-            # 5. Execution
+            # 5. Execution (执行交易)
             if decision.get('action') in ['BUY', 'SELL']:
                 trading_logger.info(f"Initiating Order Execution for {target_symbol}: {decision}")
                 
@@ -210,7 +247,7 @@ def main():
                 order = executor.place_order(decision)
                 
                 if order:
-                    # Verify Order Status
+                    # Verify Order Status (确认订单状态)
                     print("Verifying order status...")
                     time.sleep(2) # Wait for network propagation
                     
@@ -233,6 +270,7 @@ def main():
                                 print(f"Order failed with status: {status_str}")
                                 
                                 # Fallback for HK Stocks to RMB Counter (e.g., 00388 -> 80388)
+                                # 港股双柜台重试逻辑
                                 if target_symbol and target_symbol.isdigit() and len(target_symbol) == 5 and target_symbol.startswith('0'):
                                     rmb_symbol = '8' + target_symbol[1:]
                                     print(f"Initiating fallback to RMB counter: {target_symbol} -> {rmb_symbol}")
@@ -294,7 +332,7 @@ def main():
             else:
                 print(f"Decision is {decision.get('action')}. No trade executed.")
             
-            # 6. Step 4: Manage Pending Orders
+            # 6. Step 4: Manage Pending Orders (管理挂单)
             # Check if there are any active orders that need attention (e.g. partial fills, old orders)
             try:
                 open_orders = executor.get_open_orders()
@@ -331,7 +369,7 @@ def main():
                 error_logger.error(f"Error managing pending orders: {e}")
                 print(f"Error managing pending orders: {e}")
 
-            # Cooldown
+            # Cooldown (冷却时间)
             time.sleep(180) 
 
         except KeyboardInterrupt:

@@ -1,3 +1,14 @@
+"""
+DeepSeek AI Agent Module (AI 智能代理模块)
+
+This module defines the AI agent responsible for market analysis and decision making.
+It uses LangChain and DeepSeek LLM to:
+1. Select tickers based on strategy (select_ticker).
+2. Analyze specific stocks using technicals, fundamentals, and web search (analyze_market).
+3. Manage risk and positions (manage_positions).
+4. Manage pending orders (manage_pending_orders).
+"""
+
 import json
 import os
 import traceback
@@ -20,6 +31,7 @@ def market_web_search(query: str):
     """
     Useful for searching the latest market news, sentiment, or specific stock events on the internet.
     Input should be a specific query string.
+    用于搜索互联网上的最新市场新闻、情绪或特定股票事件。
     """
     try:
         return search_tool.run(query)
@@ -29,6 +41,7 @@ def market_web_search(query: str):
 class DeepSeekAgent:
     def __init__(self):
         # LangChain Chat Model (DeepSeek Compatible)
+        # 初始化 LangChain 聊天模型
         self.llm = ChatOpenAI(
             model="deepseek-reasoner",
             openai_api_key=config.DEEPSEEK_API_KEY,
@@ -43,6 +56,7 @@ class DeepSeekAgent:
     def select_ticker(self, user_strategy, current_holdings=None, universe_constraint="HSI, HSCEI, CSI 300"):
         """
         Step 1: Select a ticker based on strategy and internet search, constrained by universe.
+        步骤 1: 根据策略和网络搜索选择一个股票，限制在特定范围内。
         """
         print(f"  - Searching for candidates in {universe_constraint}...")
         
@@ -52,7 +66,7 @@ class DeepSeekAgent:
             holdings_str = ", ".join([f"{h['symbol']} ({h['quantity']} shares)" for h in current_holdings])
             holdings_context = f"Current Portfolio Holdings: {holdings_str}"
         
-        # 1. Perform a broad search to get market context
+        # 1. Perform a broad search to get market context (广泛搜索市场背景)
         search_query = f"top performing stocks or best buy candidates in {universe_constraint} today based on {user_strategy}"
         try:
             # access global search_tool
@@ -63,7 +77,7 @@ class DeepSeekAgent:
             error_logger.warning(f"Search warning during ticker selection: {e}")
             search_results = "Search unavailable. Rely on internal knowledge."
 
-        # 2. Ask LLM to pick a stock
+        # 2. Ask LLM to pick a stock (让LLM选股)
         prompt = f"""
         You are an expert portfolio manager.
         User Strategy: {user_strategy}
@@ -120,6 +134,7 @@ class DeepSeekAgent:
         """
         Step 3: Manage pending (active) orders.
         Decide whether to KEEP, MODIFY, or CANCEL based on market conditions.
+        步骤 3: 管理挂单。根据市场情况决定是保留、修改还是取消订单。
         """
         if not open_orders:
             return []
@@ -202,6 +217,7 @@ class DeepSeekAgent:
     def manage_positions(self, positions):
         """
         Review all current positions for risk management (Stop Loss / Take Profit).
+        审查当前持仓以进行风控管理（止损/止盈）。
         """
         if not positions:
             return []
@@ -254,6 +270,7 @@ class DeepSeekAgent:
     def analyze_market(self, symbol, daily_data_json, weekly_data_json, fundamental_data_json, user_strategy, position_context=None, funds_info=None):
         """
         Step 2: Analyze specific ticker with Tools (Web Search).
+        步骤 2: 使用工具（网络搜索）分析特定股票。
         使用简化的方法：先搜索，再分析 (Simplified approach: search first, then analyze)
         """
         
@@ -268,7 +285,7 @@ class DeepSeekAgent:
             error_logger.warning(f"Search failed for {symbol}: {e}")
             search_results = "No recent news available."
         
-        # Step 2: Prepare Cash Context
+        # Step 2: Prepare Cash Context (准备资金上下文)
         cash_context = "No cash info available."
         if funds_info:
             # Determine currency simple heuristic: digits -> HKD, chars -> USD

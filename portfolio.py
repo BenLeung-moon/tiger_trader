@@ -1,3 +1,14 @@
+"""
+Portfolio Manager Module (资产组合管理模块)
+
+This module handles all interactions related to account assets and positions.
+It uses TigerOpen API to fetch:
+1. Current positions (get_all_positions).
+2. Specific position details (get_position).
+3. Account funds and cash balance (get_account_funds).
+4. Portfolio summary (get_portfolio_summary).
+"""
+
 from tigeropen.trade.trade_client import TradeClient
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.common.util.signature_utils import read_private_key
@@ -24,6 +35,7 @@ class PortfolioManager:
         """
         Fetches all current positions for the account.
         Returns a list of dictionaries with position details.
+        获取账户所有当前持仓。
         """
         if not self.trade_client:
             return []
@@ -55,6 +67,7 @@ class PortfolioManager:
         """
         Fetches the current position for a given symbol.
         Returns a dictionary with position details or None if not found.
+        获取指定股票的持仓详情。
         """
         if not self.trade_client:
             return None
@@ -87,6 +100,7 @@ class PortfolioManager:
         """
         Fetches account funds, specifically available cash for trade in different currencies.
         Returns a dictionary: {'USD': {'cash_available_for_trade': 1000.0, ...}, 'HKD': ...}
+        获取账户资金信息，特别是各币种的可用现金。
         """
         if not self.trade_client:
             return {}
@@ -123,3 +137,29 @@ class PortfolioManager:
         except Exception as e:
             error_logger.error(f"Error fetching account funds: {e}")
             return {}
+
+    def get_portfolio_summary(self):
+        """
+        Fetches high-level portfolio summary (Net Liquidation, Gross Position Value).
+        获取投资组合摘要（净资产、持仓市值等）。
+        """
+        if not self.trade_client:
+            return {}
+        try:
+            assets = self.trade_client.get_prime_assets(account=config.TIGER_ACCOUNT)
+            if assets:
+                if isinstance(assets, list):
+                    account_asset = assets[0]
+                else:
+                    account_asset = assets
+                
+                return {
+                    "net_liquidation": getattr(account_asset, 'net_liquidation', 0.0),
+                    "gross_position_value": getattr(account_asset, 'gross_position_value', 0.0),
+                    "equity_with_loan": getattr(account_asset, 'equity_with_loan', 0.0),
+                    "cash_balance": getattr(account_asset, 'cash_balance', 0.0) # Note: might be currency specific
+                }
+            return {}
+        except Exception as e:
+             error_logger.error(f"Error fetching portfolio summary: {e}")
+             return {}

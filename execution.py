@@ -1,8 +1,17 @@
+"""
+Order Execution Module (订单执行模块)
+
+This module handles the actual placement, modification, and cancellation of orders
+via the TigerOpen API.
+It also interacts with the local database to log trade history.
+"""
+
 from tigeropen.trade.trade_client import TradeClient
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.common.consts import Market, SecurityType, Currency
 import config
 from utils import setup_loggers, round_price_to_tick
+from database import SessionLocal, Trade
 
 trading_logger, error_logger = setup_loggers()
 
@@ -24,6 +33,7 @@ class OrderExecutor:
         """
         Executes the order based on the AI signal.
         Returns the order object/id if successful, None otherwise.
+        根据AI信号执行订单。成功返回订单对象，否则返回None。
         """
         if not self.trade_client:
             error_logger.error("TradeClient is not initialized. Cannot place order.")
@@ -45,13 +55,14 @@ class OrderExecutor:
 
         # Determine Market and Currency
         # Simple logic: US stocks usually 4 letters or less, HK stocks are numeric
+        # 判断市场和货币
         market = Market.US
         currency = Currency.USD
         if symbol.isdigit() and len(symbol) == 5:
             market = Market.HK
             currency = Currency.HKD
         
-        # Construct Contract
+        # Construct Contract (构建合约对象)
         try:
             contract = self.trade_client.get_contracts(
                 symbol=symbol, 
@@ -62,7 +73,7 @@ class OrderExecutor:
             error_logger.error(f"Error fetching contract for {symbol}: {e}")
             return None
 
-        # Validate and Adjust Price
+        # Validate and Adjust Price (验证并调整价格)
         if price > 0:
             is_hk = (market == Market.HK)
             
@@ -77,7 +88,7 @@ class OrderExecutor:
 
         try:
             if price > 0:
-                # Limit Order
+                # Limit Order (限价单)
                 order = self.trade_client.create_order(
                     account=config.TIGER_ACCOUNT,
                     contract=contract,
@@ -87,7 +98,7 @@ class OrderExecutor:
                     limit_price=price
                 )
             else:
-                # Market Order
+                # Market Order (市价单)
                 order = self.trade_client.create_order(
                     account=config.TIGER_ACCOUNT,
                     contract=contract,
@@ -99,7 +110,30 @@ class OrderExecutor:
             # The return from create_order is usually an Order object or ID
             
             self.trade_client.place_order(order)
-            trading_logger.info(f"Order placed successfully! Order ID: {order.order_id if hasattr(order, 'order_id') else order}")
+            order_id = order.order_id if hasattr(order, 'order_id') else str(order)
+            trading_logger.info(f"Order placed successfully! Order ID: {order_id}")
+            
+            # Save to DB (保存交易记录到数据库)
+            try:
+                db = SessionLocal()
+                # Check if order_signal has strategy, otherwise generic
+                strategy_name = order_signal.get('strategy', 'Agentic Strategy')
+                
+                db_trade = Trade(
+                    symbol=symbol,
+                    action=action,
+                    quantity=quantity,
+                    price=price,
+                    strategy=strategy_name,
+                    reason=order_signal.get('reason', ''),
+                    order_id=str(order_id),
+                    status="SUBMITTED"
+                )
+                db.add(db_trade)
+                db.commit()
+                db.close()
+            except Exception as db_err:
+                error_logger.error(f"Failed to log trade to DB: {db_err}")
             
             return order
             
@@ -119,7 +153,29 @@ class OrderExecutor:
                         quantity=quantity
                     )
                     self.trade_client.place_order(order)
-                    trading_logger.info(f"Retry Market Order placed successfully! Order ID: {order.order_id if hasattr(order, 'order_id') else order}")
+                    retry_order_id = order.order_id if hasattr(order, 'order_id') else str(order)
+                    trading_logger.info(f"Retry Market Order placed successfully! Order ID: {retry_order_id}")
+                    
+                     # Save to DB (Retry)
+                    try:
+                        db = SessionLocal()
+                        strategy_name = order_signal.get('strategy', 'Agentic Strategy')
+                        db_trade = Trade(
+                            symbol=symbol,
+                            action=action,
+                            quantity=quantity,
+                            price=0, # Market order
+                            strategy=strategy_name,
+                            reason=order_signal.get('reason', '') + " (Retry Market Order)",
+                            order_id=str(retry_order_id),
+                            status="SUBMITTED"
+                        )
+                        db.add(db_trade)
+                        db.commit()
+                        db.close()
+                    except Exception as db_err:
+                        error_logger.error(f"Failed to log retry trade to DB: {db_err}")
+
                     return order
                 except Exception as retry_e:
                     error_logger.error(f"Failed to execute retry Market Order: {retry_e}")
@@ -131,6 +187,7 @@ class OrderExecutor:
     def get_order_status(self, order_id):
         """
         Checks the status of an order.
+        查询订单状态。
         """
         if not self.trade_client or not order_id:
             return None
@@ -146,6 +203,7 @@ class OrderExecutor:
     def get_open_orders(self):
         """
         Fetches all open (active) orders.
+        获取所有活动订单。
         """
         if not self.trade_client:
             return []
@@ -159,6 +217,7 @@ class OrderExecutor:
     def cancel_order(self, order_id):
         """
         Cancels an existing order.
+        取消订单。
         """
         if not self.trade_client or not order_id:
             return False
@@ -173,6 +232,7 @@ class OrderExecutor:
     def modify_order(self, order_id, new_price=None, new_quantity=None):
         """
         Modifies an existing order (price or quantity).
+        修改订单（价格或数量）。
         """
         if not self.trade_client or not order_id:
             return False
@@ -197,6 +257,7 @@ class OrderExecutor:
     def cancel_all_open_orders(self):
         """
         Cancels all currently open orders.
+        取消所有活动订单。
         """
         open_orders = self.get_open_orders()
         if not open_orders:
