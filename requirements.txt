@@ -5,7 +5,7 @@ pandas-ta
 langchain
 langchain-community
 langchain-openai
-duckduckgo-search
+duckduckgo-search>=5.3.1
 sqlalchemy
 fastapi
 uvicorn
