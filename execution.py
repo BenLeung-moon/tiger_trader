@@ -7,9 +7,11 @@ It also interacts with the local database to log trade history.
 """
 
 from tigeropen.trade.trade_client import TradeClient
+from tigeropen.quote.quote_client import QuoteClient
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.common.consts import Market, SecurityType, Currency
 import config
+import math
 from utils import setup_loggers, round_price_to_tick
 from database import SessionLocal, Trade
 
@@ -25,9 +27,11 @@ class OrderExecutor:
         
         try:
             self.trade_client = TradeClient(self.client_config)
+            self.quote_client = QuoteClient(self.client_config)
         except Exception as e:
-            error_logger.error(f"Error initializing TradeClient: {e}")
+            error_logger.error(f"Error initializing Clients: {e}")
             self.trade_client = None
+            self.quote_client = None
 
     def place_order(self, order_signal):
         """
@@ -58,10 +62,67 @@ class OrderExecutor:
         # 判断市场和货币
         market = Market.US
         currency = Currency.USD
-        if symbol.isdigit() and len(symbol) == 5:
-            market = Market.HK
-            currency = Currency.HKD
+        is_cn = False
         
+        if symbol.isdigit():
+            if len(symbol) == 5:
+                market = Market.HK
+                currency = Currency.HKD
+            elif len(symbol) == 6:
+                # A-Shares (CN)
+                market = Market.CN
+                currency = Currency.CNH # or CNY depending on account type, usually CNH for HK connection
+                is_cn = True
+
+        # --- A-Share Rule Enforcement (A股规则执行) ---
+        if is_cn:
+            # 1. Lot Size Enforcement (每手股数限制)
+            if action == 'BUY':
+                is_star = symbol.startswith('68') # STAR Market (科创板)
+                
+                if is_star:
+                    # STAR Market: Min 200, Step 1 (科创板: 200股起买, 1股递增)
+                    if quantity < 200:
+                        error_logger.error(f"STAR Market Buy Quantity {quantity} < 200. Rejected.")
+                        return None
+                    adjusted_qty = int(quantity)
+                else:
+                    # Main Board & ChiNext: Min 100, Step 100 (主板/创业板: 100股起买, 100股递增)
+                    if quantity < 100:
+                        error_logger.error(f"A-Share Buy Quantity {quantity} < 100. Rejected.")
+                        return None
+                    # Round down to nearest 100
+                    adjusted_qty = math.floor(quantity / 100) * 100
+
+                if adjusted_qty != quantity:
+                    trading_logger.info(f"A-Share Buy Quantity adjusted from {quantity} to {adjusted_qty} (Market Rules Applied)")
+                    quantity = adjusted_qty
+            
+            # 2. Price Limit Enforcement (涨跌幅限制)
+            if price > 0 and self.quote_client:
+                try:
+                    # Determine limit percentage
+                    limit_rate = 0.10 # Default 10% (Main Board)
+                    if symbol.startswith('30') or symbol.startswith('68'):
+                        limit_rate = 0.20 # ChiNext / STAR Market
+                    
+                    # Fetch pre_close
+                    briefs = self.quote_client.get_stock_briefs(symbols=[symbol])
+                    if not briefs.empty:
+                        pre_close = briefs.iloc[0].get('pre_close', 0)
+                        if pre_close and pre_close > 0:
+                            upper_limit = round(pre_close * (1 + limit_rate), 2)
+                            lower_limit = round(pre_close * (1 - limit_rate), 2)
+                            
+                            if price > upper_limit:
+                                trading_logger.warning(f"Price {price} exceeds upper limit {upper_limit}. Capped.")
+                                price = upper_limit
+                            elif price < lower_limit:
+                                trading_logger.warning(f"Price {price} below lower limit {lower_limit}. Adjusted.")
+                                price = lower_limit
+                except Exception as rule_err:
+                    error_logger.error(f"Error enforcing A-share price limits: {rule_err}")
+
         # Construct Contract (构建合约对象)
         try:
             contract = self.trade_client.get_contracts(
