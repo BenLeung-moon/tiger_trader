@@ -142,22 +142,38 @@ class PortfolioManager:
         """
         Fetches high-level portfolio summary (Net Liquidation, Gross Position Value).
         获取投资组合摘要（净资产、持仓市值等）。
+        根据官方文档，综合账户的资产信息在 segments['S'] (证券账户) 中。
         """
         if not self.trade_client:
             return {}
         try:
+            # get_prime_assets 返回的是 PortfolioAccount 对象列表
             assets = self.trade_client.get_prime_assets(account=config.TIGER_ACCOUNT)
             if assets:
-                if isinstance(assets, list):
-                    account_asset = assets[0]
-                else:
-                    account_asset = assets
+                account_asset = assets[0] if isinstance(assets, list) else assets
                 
+                # 获取证券账户段 ('S') 的信息
+                if hasattr(account_asset, 'segments') and 'S' in account_asset.segments:
+                    segment = account_asset.segments['S']
+                    return {
+                        "net_liquidation": getattr(segment, 'net_liquidation', 0.0),
+                        "gross_position_value": getattr(segment, 'gross_position_value', 0.0),
+                        "equity_with_loan": getattr(segment, 'equity_with_loan', 0.0),
+                        "cash_balance": getattr(segment, 'cash_balance', 0.0),
+                        "unrealized_pnl": getattr(segment, 'unrealized_pl', 0.0),
+                        "realized_pnl": getattr(segment, 'realized_pl', 0.0),
+                        "buying_power": getattr(segment, 'buying_power', 0.0)
+                    }
+                
+                # 备选方案：如果 segments 不存在，尝试直接获取 (部分 SDK 版本可能直接平铺)
                 return {
                     "net_liquidation": getattr(account_asset, 'net_liquidation', 0.0),
                     "gross_position_value": getattr(account_asset, 'gross_position_value', 0.0),
                     "equity_with_loan": getattr(account_asset, 'equity_with_loan', 0.0),
-                    "cash_balance": getattr(account_asset, 'cash_balance', 0.0) # Note: might be currency specific
+                    "cash_balance": getattr(account_asset, 'cash_balance', 0.0),
+                    "unrealized_pnl": getattr(account_asset, 'unrealized_pl', 0.0),
+                    "realized_pnl": getattr(account_asset, 'realized_pl', 0.0),
+                    "buying_power": getattr(account_asset, 'buying_power', 0.0)
                 }
             return {}
         except Exception as e:
