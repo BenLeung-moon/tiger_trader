@@ -90,7 +90,7 @@ sudo docker compose logs -f backend
 
 Stop services:
 ```bash
-sudo docker compose down
+sudo docker compose down   
 ```
 
 ## Troubleshooting
